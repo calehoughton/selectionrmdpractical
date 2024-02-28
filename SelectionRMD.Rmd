@@ -1,0 +1,263 @@
+
+###Load packages
+```{r packages, echo=T, message=F, warnings=F}
+library(lme4) # mixed effect models
+library(ggplot2) # graphics
+library(dplyr) # data manipulation
+
+```
+
+###Load data
+```{r setup}
+setwd("~/Downloads")
+deer.data<-read.csv('deer data for selection analysis.csv',header=T,stringsAsFactors = T)  # read in the data
+
+```
+
+
+### Visualising the data
+
+
+```{r visualise}
+head(deer.data)
+```
+
+```{r factors}
+deer.data$Sex<-as.factor(deer.data$Sex)
+deer.data$BirthYear<-as.factor(deer.data$BirthYear)
+```
+
+Summarise the data in the column Birth Weight:
+```{r describe birth weight, echo=F, message=F, warnings=F}
+summary(deer.data$BirthWt)
+
+#hist(deer.data$BirthWt.tr)
+ggplot(deer.data, aes(BirthWt)) + 
+  geom_histogram(binwidth = .2,colour="black",fill="white")+
+  xlab("Birth weight (kg)")+
+  theme_bw()
+```
+
+### Distribution of birth weight split by sex
+```{r split by sex, message=F, warnings=F}
+tapply(deer.data$BirthWt, deer.data$Sex, summary)
+
+ggplot(deer.data, aes(BirthWt, fill = Sex)) + 
+  geom_histogram(binwidth = .2,position="dodge")+
+  xlab("Birth weight (kg)")+
+  theme_bw()
+```
+
+Alternatively looking at the variation in birth weights of the two sexes across the years:
+```{r split by year, message=F, warnings=F}
+
+ggplot(deer.data, aes(BirthYear, BirthWt, col=Sex))+ 
+  geom_point()+ 
+  xlab("Year")+
+  ylab("Calf birth weight (kg)")+
+  theme(axis.text.x = element_text(angle = -90, hjust=0))+  # can't get axis labels to flip
+  theme_bw()
+```
+
+... which shows a lot of variation in the data
+
+
+
+
+### Fit a linear model of birth weight 
+
+
+```{r linear model of birth weight, message=F, warnings=F}
+lm1<-lm(BirthWt ~ Sex, data=deer.data)
+summary(lm1)
+```
+Very low R-squared value reflects the large amount of variation in the data
+
+
+## Fit a linear mixed model of birth weight
+The linear model above does not take into account the structuring in the data, with calves born in different years and to different mothers. Here I used a mixed effects model
+
+```{r linear mixed effects model, message=F, warnings=F}
+lme1<-lmer(BirthWt ~ Sex + (1|BirthYear) + (1|Mum), data=deer.data)
+summary(lme1)
+```
+Confirms the statistical difference between the sexes
+
+## Check diagnostics of the model of birth weight
+``` {r check residuals, message=F, warnings=F}
+plot(lme1)
+qqnorm(residuals(lme1))
+qqline(residuals(lme1))
+```
+
+Sufficient for this purpose.
+
+# Models of selection
+We will now look at the natural selection acting on birth weight, by quantifying its association with components of fitness.
+
+The data file contains columns with Lifetime Breeding Success (LBS) for males and females separately: this is the total number of offspring that an individual produces in its lifetime.
+The distribution of these values:
+```{r summarise LBS values}
+summary(deer.data$FemaleLBS)  # summarise female LBS
+ggplot(deer.data, aes(FemaleLBS)) + 
+  geom_histogram(binwidth = 1,colour="black",fill="lightgrey")+
+  xlab('Female Lifetime Breeding Success')+
+  theme_bw()
+  
+summary(deer.data$MaleLBS) # summarise male LBS
+ggplot(deer.data, aes(MaleLBS)) + 
+  geom_histogram(binwidth = 1,colour="black",fill="darkgrey")+
+  xlab('Male Lifetime Breeding Success')+
+  theme_bw()
+```
+
+Lifetime breeding success is a difficult distribution to analyse, so we will therefore split it into two components: 
+
+survival to adulthood ('juvenile survival'), 
+and then breeding success amongst those that survive to adulthood ('adult breeding success'). 
+
+### Natural selection via variation in juvenile survival
+We define 'juvenile survival' by whether or not an individual lives to age 3.
+```{r define juvenile survival and adult breeding success}
+deer.data <- deer.data %>%
+  mutate(JuvSurv=ifelse(AgeAtDeath>2,1,0)) 
+
+# quick summary table
+table(deer.data$JuvSurv,deer.data$AgeAtDeath)
+```
+
+### Does juvenile survival depend on birth weight?
+
+```{r glm}
+tapply(deer.data$BirthWt, deer.data$JuvSurv,mean)
+```
+
+### Estimating a 'selection differential' for birth weight via juvenile survival
+
+The 'selection differential' on a trait is the difference in the mean before vs after selection.
+It is the difference between the mean birth weight of all calves, compared to the mean of those that survived.
+
+```{r difference in means}
+
+mean(deer.data$BirthWt)
+mean(deer.data$BirthWt[deer.data$JuvSurv==1],na.rm=T)
+mean(deer.data$BirthWt[deer.data$JuvSurv==1],na.rm=T) - mean(deer.data$BirthWt,na.rm=T)
+
+```
+Another way to estimate the selection differential on a trait is the statistical covariance between the trait and relative fitness, where relative fitness is the fitness measure standardised to a mean of 1. 
+
+
+```{r covariance}
+deer.data <- deer.data %>% 
+  mutate(rel_JuvSurv=JuvSurv/mean(JuvSurv))   # creates a new column of relative juvenile survival
+CovJS<-cov(deer.data$rel_JuvSurv,deer.data$BirthWt,use="pairwise.complete.obs")    # estimates covariance with birth weight
+CovJS
+```
+
+
+```{r rescaling to get population covariance}
+N<-length(deer.data$BirthWt)   # number of observations
+CovJS * (N-1)/N
+```
+### Estimating a 'selection gradient' for selection on birth weight via juvenile survival
+This is the gradient (slope) of a linear regression of relative fitness on the trait.
+
+```{r selection gradient via juvenile survival}
+lm.juvsurv<-lm(rel_JuvSurv ~ Sex+BirthWt, data=deer.data)
+summary(lm.juvsurv)
+
+```
+
+
+# Statistical models of selection on birth weight 
+Using a GLMM this time.
+
+## Selection model for juvenile survival, with both sexes together
+```{r glmm juvenile survival}
+glmm.juvsurv<-glmer(JuvSurv ~ Sex+BirthWt+(1|Mum)+(1|BirthYear), data=deer.data, family='binomial')
+summary(glmm.juvsurv)
+```
+
+
+
+
+## Selection via adult breeding success
+Now considering selection via adult breeding success
+```{r define adult LBS, message=F, warnings=F}
+deer.data<-deer.data %>%
+  mutate(Fem_AdultLBS=ifelse(AgeAtDeath>2,FemaleLBS,NA)) %>%  
+  mutate(Male_AdultLBS=ifelse(AgeAtDeath>2,MaleLBS,NA))        
+
+ggplot(deer.data, aes(Fem_AdultLBS)) + 
+  geom_histogram(binwidth = 1,colour="black",fill="lightgrey")+
+  theme_bw()+ 
+  xlab("Female Adult LBS")
+
+ggplot(deer.data, aes(Male_AdultLBS)) + 
+  geom_histogram(binwidth = 1,colour="black",fill="darkgrey")+
+  theme_bw()+ 
+  xlab("Male Adult LBS")
+```
+
+
+
+Female Adult LBS follows a Poisson distribution, Male Adult LBS is much more skewed and needs a Negative Binomial.
+
+### Females:  selection on birth weight via adult LBS
+Plotting the data to look at the relationship between birth weight and adult LBS. 
+```{r plot female adult LBS birthwt}
+ggplot(deer.data, aes(BirthWt,Fem_AdultLBS))+ 
+  geom_point()+ 
+  xlab("birth weight (kg)")+
+  ylab("Female Adult LBS")+
+  theme(axis.text.x = element_text(angle = -90, hjust=0))+  # can't get axis labels to flip
+  theme_bw()
+```
+GLMM for adult lifetime breeding success in females, specifying a Poisson distribution
+
+``` {r glmm female adult LBS}
+glmm.Fem_AdultLBS<-glmer(Fem_AdultLBS ~ BirthWt+(1|Mum)+(1|BirthYear), data=deer.data, family='poisson')
+summary(glmm.Fem_AdultLBS)
+```
+
+## Males:  selection model for adult LBS
+
+```{r glmm.nb male adult LBS}
+ggplot(deer.data, aes(BirthWt,Male_AdultLBS))+ 
+  geom_point()+ 
+  xlab("birth weight (kg)")+
+  ylab("Male Adult LBS")+
+  theme(axis.text.x = element_text(angle = -90, hjust=0))+  # can't get axis labels to flip
+  theme_bw()
+
+glmm.Male_AdultLBS<-glmer.nb(Male_AdultLBS ~ BirthWt+(1|BirthYear), data=deer.data)
+summary(glmm.Male_AdultLBS)
+```
+
+### Estimating selection differentials and selection gradients for birth weight via adult breeding success
+Estimates of the two selection coefficients in either sex via adult lifetime breeding success. First, defining the relative fitness  for LBS in each sex.
+```{r define relative LBS}
+deer.data<-deer.data %>%
+  mutate(relFem_AdultLBS=Fem_AdultLBS/mean(Fem_AdultLBS,na.rm=T)) %>%
+  mutate(relMale_AdultLBS=Male_AdultLBS/mean(Male_AdultLBS,na.rm=T))    
+# check that it's done it right
+mean(deer.data$relFem_AdultLBS,na.rm=T)
+mean(deer.data$relMale_AdultLBS,na.rm=T)
+```
+
+#### Selection differentials via adult LBS
+For adult breeding success, I estimate a selection differential in either sex from the covariance with relative LBS.
+```{r selection gradients for adult LBS}
+cov(deer.data$BirthWt,deer.data$relFem_AdultLBS,use="complete.obs") 
+cov(deer.data$BirthWt,deer.data$relMale_AdultLBS,use="complete.obs")
+```
+
+#### Selection gradients
+Finally, selection gradients* can be taken from linear regressions of relative fitness in either sex.
+```{r selection differentials for adult LBS}
+lm.femLBS<-lm(relFem_AdultLBS~BirthWt,data=deer.data) 
+summary(lm.femLBS)$coeff[2,1:2]
+lm.maleLBS<-lm(relMale_AdultLBS~BirthWt,data=deer.data) 
+summary(lm.maleLBS)$coeff[2,1:2] # female and male selection gradients are printed
+
+```

@@ -1,0 +1,3 @@
+This is a practical demonstrating how to quantify the strength of natural selection acting on a trait, using standard statistical techniques.
+It involves analysis of data on birth weight of red deer calves from the long-term study of red deer on the Isle of Rum, Inner Hebrides, Scotland. This data is subset from the original dataset.
+The use of R markdown and code annotation was also practiced here.
